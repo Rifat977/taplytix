@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -28,6 +29,8 @@ func main() {
 func newRootCmd() *cobra.Command {
 	var configPath string
 	var logsPath string
+	var promEndpoint string
+	var statsdAddr string
 
 	root := &cobra.Command{
 		Use:   "taplytix",
@@ -35,8 +38,10 @@ func newRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringVarP(&configPath, "config", "c", "taplytix.toml", "path to config file")
 	root.PersistentFlags().StringVar(&logsPath, "logs", "", "tail log file (overrides config; use '-' for stdin)")
+	root.PersistentFlags().StringVar(&promEndpoint, "prom", "", "Prometheus scrape endpoint (e.g. http://localhost:9090/metrics)")
+	root.PersistentFlags().StringVar(&statsdAddr, "statsd", "", "StatsD UDP listen address (e.g. :8125)")
 
-	startCmd := newStartCmd(&configPath, &logsPath)
+	startCmd := newStartCmd(&configPath, &logsPath, &promEndpoint, &statsdAddr)
 	root.AddCommand(startCmd)
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newVersionCmd())
@@ -46,7 +51,7 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-func newStartCmd(configPath, logsPath *string) *cobra.Command {
+func newStartCmd(configPath, logsPath, promEndpoint, statsdAddr *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
 		Short: "Start the taplytix dashboard",
@@ -61,10 +66,18 @@ func newStartCmd(configPath, logsPath *string) *cobra.Command {
 			}
 			if *logsPath != "" {
 				cfg.Sources = append(cfg.Sources, config.SourceConfig{
-					Name:   "logs",
-					Type:   "logs",
-					Path:   *logsPath,
-					Format: "auto",
+					Name: "logs", Type: "logs", Path: *logsPath, Format: "auto",
+				})
+			}
+			if *promEndpoint != "" {
+				cfg.Sources = append(cfg.Sources, config.SourceConfig{
+					Name: "prom", Type: "prometheus", Endpoint: *promEndpoint,
+					Interval: config.Duration(2 * time.Second),
+				})
+			}
+			if *statsdAddr != "" {
+				cfg.Sources = append(cfg.Sources, config.SourceConfig{
+					Name: "statsd", Type: "statsd", Listen: *statsdAddr,
 				})
 			}
 			return runTUI(cfg)
@@ -156,6 +169,12 @@ func startReceivers(ctx context.Context, cfg *config.Config, st *store.Store, b 
 				Format:   src.Format,
 				Service:  src.Name,
 			})
+		case "prometheus":
+			r = receiver.NewPrometheus(src.Name, src.Endpoint, src.Interval.Std())
+		case "statsd":
+			r = receiver.NewStatsD(src.Name, src.Listen)
+		case "sysstat":
+			r = receiver.NewOSSidecar(src.Name, src.Process, src.PID, src.Interval.Std())
 		default:
 			continue
 		}
