@@ -4,9 +4,14 @@ import (
 	"fmt"
 	"os"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/rifat977/taplytix/internal/bus"
 	"github.com/rifat977/taplytix/internal/config"
+	"github.com/rifat977/taplytix/internal/store"
+	"github.com/rifat977/taplytix/internal/tui"
+	"github.com/rifat977/taplytix/internal/tui/panels"
 )
 
 const version = "v0.1.0"
@@ -49,9 +54,7 @@ func newStartCmd(configPath *string) *cobra.Command {
 				cfg = config.Default()
 				fmt.Fprintf(cmd.OutOrStderr(), "no config at %s — using defaults\n", *configPath)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "starting taplytix — config loaded (%d source(s), refresh %dms)\n",
-				len(cfg.Sources), cfg.Server.RefreshMs)
-			return nil
+			return runTUI(cfg)
 		},
 	}
 }
@@ -76,6 +79,26 @@ func newVersionCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func runTUI(cfg *config.Config) error {
+	st := store.New()
+	b := bus.New()
+
+	ps := []panels.Panel{
+		panels.NewPlaceholder("Overview"),
+		panels.NewPlaceholder("Traces"),
+		panels.NewPlaceholder("Metrics"),
+		panels.NewPlaceholder("Logs"),
+		panels.NewPlaceholder("Services"),
+	}
+
+	app := tui.NewApp(cfg, st, b, ps)
+	prog := tea.NewProgram(app, tea.WithAltScreen())
+	b.SetProgram(prog)
+
+	_, err := prog.Run()
+	return err
 }
 
 func unwrapPathErr(err error) error {
