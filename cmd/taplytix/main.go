@@ -7,6 +7,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/activeterm"
+	btea "github.com/charmbracelet/wish/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/rifat977/taplytix/internal/alert"
@@ -45,6 +49,7 @@ func newRootCmd() *cobra.Command {
 
 	startCmd := newStartCmd(&configPath, &logsPath, &promEndpoint, &statsdAddr)
 	root.AddCommand(startCmd)
+	root.AddCommand(newServeCmd(&configPath))
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newVersionCmd())
 
@@ -85,6 +90,31 @@ func newStartCmd(configPath, logsPath, promEndpoint, statsdAddr *string) *cobra.
 			return runTUI(cfg)
 		},
 	}
+}
+
+func newServeCmd(configPath *string) *cobra.Command {
+	var sshAddr, hostKey, authorizedKeys string
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve the TUI over SSH (--ssh)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if sshAddr == "" {
+				return fmt.Errorf("--ssh address required")
+			}
+			cfg, err := config.Load(*configPath)
+			if err != nil {
+				if !os.IsNotExist(unwrapPathErr(err)) {
+					return err
+				}
+				cfg = config.Default()
+			}
+			return runSSH(cfg, sshAddr, hostKey, authorizedKeys)
+		},
+	}
+	cmd.Flags().StringVar(&sshAddr, "ssh", ":2222", "SSH server listen address")
+	cmd.Flags().StringVar(&hostKey, "host-key", "", "path to PEM-encoded host key (random if empty)")
+	cmd.Flags().StringVar(&authorizedKeys, "authorized-keys", "", "path to authorized_keys file (allow-all if empty)")
+	return cmd
 }
 
 func newInitCmd() *cobra.Command {
@@ -146,6 +176,67 @@ func runTUI(cfg *config.Config) error {
 
 	_, err := prog.Run()
 	return err
+}
+
+func runSSH(cfg *config.Config, sshAddr, hostKey, authorizedKeys string) error {
+	st := store.New()
+	b := bus.New()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	receivers := startReceivers(ctx, cfg, st, b)
+	defer func() {
+		for _, r := range receivers {
+			_ = r.Stop()
+		}
+	}()
+	if engine := buildAlertEngine(cfg, st, b); engine != nil {
+		go engine.Run(ctx)
+	}
+
+	handler := func(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
+		initialService := cfg.Server.DefaultService
+		if initialService == "" && len(cfg.Sources) > 0 {
+			initialService = cfg.Sources[0].Name
+		}
+		ps := []panels.Panel{
+			panels.NewOverview(cfg, st),
+			panels.NewTraces(st),
+			panels.NewMetrics(st),
+			panels.NewLogs(st),
+			panels.NewServices(st, initialService),
+		}
+		app := tui.NewApp(cfg, st, b, ps)
+		return app, append(btea.MakeOptions(sess), tea.WithAltScreen())
+	}
+
+	opts := []ssh.Option{
+		wish.WithAddress(sshAddr),
+		wish.WithMiddleware(
+			btea.Middleware(handler),
+			activeterm.Middleware(),
+		),
+	}
+	if hostKey != "" {
+		opts = append(opts, wish.WithHostKeyPath(hostKey))
+	}
+	if authorizedKeys != "" {
+		opts = append(opts, wish.WithAuthorizedKeys(authorizedKeys))
+	}
+
+	srv, err := wish.NewServer(opts...)
+	if err != nil {
+		return fmt.Errorf("ssh server: %w", err)
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		defer c()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	fmt.Fprintf(os.Stderr, "taplytix serving SSH on %s\n", sshAddr)
+	return srv.ListenAndServe()
 }
 
 func buildAlertEngine(cfg *config.Config, st *store.Store, b *bus.Bus) *alert.Engine {
@@ -232,6 +323,8 @@ func startReceivers(ctx context.Context, cfg *config.Config, st *store.Store, b 
 			r = receiver.NewStatsD(src.Name, src.Listen)
 		case "sysstat":
 			r = receiver.NewOSSidecar(src.Name, src.Process, src.PID, src.Interval.Std())
+		case "remote":
+			r = receiver.NewRemote(src.Name, src.Endpoint)
 		default:
 			continue
 		}
