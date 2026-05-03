@@ -9,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/rifat977/taplytix/internal/alert"
+	"github.com/rifat977/taplytix/internal/alert/notifier"
 	"github.com/rifat977/taplytix/internal/bus"
 	"github.com/rifat977/taplytix/internal/config"
 	"github.com/rifat977/taplytix/internal/model"
@@ -133,8 +135,58 @@ func runTUI(cfg *config.Config) error {
 		}
 	}()
 
+	if engine := buildAlertEngine(cfg, st, b); engine != nil {
+		go engine.Run(ctx)
+	}
+
 	_, err := prog.Run()
 	return err
+}
+
+func buildAlertEngine(cfg *config.Config, st *store.Store, b *bus.Bus) *alert.Engine {
+	if len(cfg.Alerts) == 0 {
+		return nil
+	}
+	rules := make([]alert.Rule, 0, len(cfg.Alerts))
+	for _, a := range cfg.Alerts {
+		r := alert.Rule{
+			Name:       a.Name,
+			Metric:     a.Metric,
+			Percentile: a.Percentile,
+			Op:         alert.Op(a.Op),
+			Threshold:  a.Threshold,
+			For:        a.For.Std(),
+			Notify:     a.Notify,
+		}
+		if err := r.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "skipping alert: %v\n", err)
+			continue
+		}
+		rules = append(rules, r)
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+
+	notifiers := []alert.Notifier{notifier.NewBell()}
+	if url := cfg.Notifier.Webhook.URL; url != "" {
+		notifiers = append(notifiers, notifier.NewWebhook(url))
+	}
+	if path := cfg.Notifier.Logfile.Path; path != "" {
+		notifiers = append(notifiers, notifier.NewLogFile(path))
+	} else {
+		notifiers = append(notifiers, notifier.NewLogFile(expandHome("~/.taplytix/alerts.log")))
+	}
+	return alert.New(st, b, rules, notifiers)
+}
+
+func expandHome(path string) string {
+	if len(path) > 1 && path[:2] == "~/" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home + path[1:]
+		}
+	}
+	return path
 }
 
 // startReceivers spins up one receiver per configured source and pumps its

@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/rifat977/taplytix/internal/alert"
 	"github.com/rifat977/taplytix/internal/bus"
 	"github.com/rifat977/taplytix/internal/config"
 	"github.com/rifat977/taplytix/internal/render"
@@ -30,6 +31,8 @@ type AppModel struct {
 	height    int
 	refresh   time.Duration
 	source    string // first source name for top bar
+
+	alerts map[string]alert.Alert // key = rule + "::" + service
 }
 
 func NewApp(cfg *config.Config, st *store.Store, b *bus.Bus, ps []panels.Panel) *AppModel {
@@ -50,8 +53,11 @@ func NewApp(cfg *config.Config, st *store.Store, b *bus.Bus, ps []panels.Panel) 
 		statusBar: NewStatusBar(),
 		refresh:   refresh,
 		source:    src,
+		alerts:    make(map[string]alert.Alert),
 	}
 }
+
+func alertKey(a alert.Alert) string { return a.Rule.Name + "::" + a.Service }
 
 func (m *AppModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickEvery(m.refresh)}
@@ -94,6 +100,16 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tickEvery(m.refresh)
+
+	case alert.FiredMsg:
+		m.alerts[alertKey(msg.Alert)] = msg.Alert
+		m.statusBar.Alerts = len(m.alerts)
+		return m, nil
+
+	case alert.ResolvedMsg:
+		delete(m.alerts, alertKey(msg.Alert))
+		m.statusBar.Alerts = len(m.alerts)
+		return m, nil
 	}
 
 	return m.delegateToActive(msg)
