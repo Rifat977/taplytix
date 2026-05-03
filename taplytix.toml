@@ -1,0 +1,26 @@
+# taplytix.toml — example configuration
+
+[server]
+refresh_ms      = 500
+log_file        = "~/.taplytix/debug.log"
+default_service = "my-app"
+
+# ── Sources (one or more) ─────────────────────────────
+[[source]]
+name = "my-api"
+type = "otlp"
+grpc = ":4317"
+http = ":4318"
+
+# ── Alerts ────────────────────────────────────────────
+[[alert]]
+name       = "high-p99"
+metric     = "http.server.duration"
+percentile = 99
+op         = ">"
+threshold  = 500          # ms
+for        = "30s"
+notify     = ["bell"]
+
+[notifier.webhook]
+url = "https://hooks.example.com/taplytix"
