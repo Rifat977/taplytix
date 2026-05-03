@@ -86,6 +86,13 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.delegateToActive(msg)
 
 	case tickMsg:
+		refresh := panels.RefreshMsg{Time: time.Time(msg)}
+		for i, p := range m.panels {
+			updated, _ := p.Update(refresh)
+			if pp, ok := updated.(panels.Panel); ok {
+				m.panels[i] = pp
+			}
+		}
 		return m, tickEvery(m.refresh)
 	}
 

@@ -86,7 +86,7 @@ func runTUI(cfg *config.Config) error {
 	b := bus.New()
 
 	ps := []panels.Panel{
-		panels.NewPlaceholder("Overview"),
+		panels.NewOverview(cfg, st),
 		panels.NewPlaceholder("Traces"),
 		panels.NewPlaceholder("Metrics"),
 		panels.NewPlaceholder("Logs"),
