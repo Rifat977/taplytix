@@ -23,6 +23,8 @@ type LogsPanel struct {
 
 	width, height int
 
+	service string // empty = show all services
+
 	vp        viewport.Model
 	filter    textinput.Model
 	filtering bool
@@ -65,6 +67,10 @@ func (p *LogsPanel) Init() tea.Cmd { return nil }
 func (p *LogsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case RefreshMsg:
+		p.refresh()
+		return p, nil
+	case ServiceChangedMsg:
+		p.service = m.Service
 		p.refresh()
 		return p, nil
 	case tea.KeyMsg:
@@ -112,8 +118,12 @@ func (p *LogsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (p *LogsPanel) refresh() {
+	services := p.store.Services()
+	if p.service != "" {
+		services = []string{p.service}
+	}
 	var all []model.LogEvent
-	for _, svc := range p.store.Services() {
+	for _, svc := range services {
 		all = append(all, p.store.LogsFor(svc)...)
 	}
 	sort.Slice(all, func(i, j int) bool {

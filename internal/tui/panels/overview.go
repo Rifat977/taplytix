@@ -94,8 +94,13 @@ func (p *OverviewPanel) SetSize(w, h int) {
 func (p *OverviewPanel) Init() tea.Cmd { return nil }
 
 func (p *OverviewPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg.(type) {
+	switch m := msg.(type) {
 	case RefreshMsg:
+		p.refresh()
+	case ServiceChangedMsg:
+		if m.Service != "" {
+			p.service = m.Service
+		}
 		p.refresh()
 	}
 	return p, nil

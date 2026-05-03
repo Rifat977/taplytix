@@ -32,6 +32,8 @@ type AppModel struct {
 	refresh   time.Duration
 	source    string // first source name for top bar
 
+	activeService string
+
 	alerts map[string]alert.Alert // key = rule + "::" + service
 }
 
@@ -45,15 +47,16 @@ func NewApp(cfg *config.Config, st *store.Store, b *bus.Bus, ps []panels.Panel) 
 		src = cfg.Sources[0].Name
 	}
 	return &AppModel{
-		cfg:       cfg,
-		store:     st,
-		bus:       b,
-		keys:      DefaultKeyMap(),
-		panels:    ps,
-		statusBar: NewStatusBar(),
-		refresh:   refresh,
-		source:    src,
-		alerts:    make(map[string]alert.Alert),
+		cfg:           cfg,
+		store:         st,
+		bus:           b,
+		keys:          DefaultKeyMap(),
+		panels:        ps,
+		statusBar:     NewStatusBar(),
+		refresh:       refresh,
+		source:        src,
+		activeService: src,
+		alerts:        make(map[string]alert.Alert),
 	}
 }
 
@@ -65,6 +68,11 @@ func (m *AppModel) Init() tea.Cmd {
 		if c := p.Init(); c != nil {
 			cmds = append(cmds, c)
 		}
+	}
+	if m.activeService != "" {
+		cmds = append(cmds, func() tea.Msg {
+			return panels.ServiceChangedMsg{Service: m.activeService}
+		})
 	}
 	return tea.Batch(cmds...)
 }
@@ -109,6 +117,17 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case alert.ResolvedMsg:
 		delete(m.alerts, alertKey(msg.Alert))
 		m.statusBar.Alerts = len(m.alerts)
+		return m, nil
+
+	case panels.ServiceChangedMsg:
+		m.activeService = msg.Service
+		m.source = msg.Service
+		for i, p := range m.panels {
+			updated, _ := p.Update(msg)
+			if pp, ok := updated.(panels.Panel); ok {
+				m.panels[i] = pp
+			}
+		}
 		return m, nil
 	}
 

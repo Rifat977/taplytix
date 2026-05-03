@@ -113,12 +113,17 @@ func runTUI(cfg *config.Config) error {
 	st := store.New()
 	b := bus.New()
 
+	initialService := cfg.Server.DefaultService
+	if initialService == "" && len(cfg.Sources) > 0 {
+		initialService = cfg.Sources[0].Name
+	}
+
 	ps := []panels.Panel{
 		panels.NewOverview(cfg, st),
 		panels.NewTraces(st),
 		panels.NewMetrics(st),
 		panels.NewLogs(st),
-		panels.NewPlaceholder("Services"),
+		panels.NewServices(st, initialService),
 	}
 
 	app := tui.NewApp(cfg, st, b, ps)

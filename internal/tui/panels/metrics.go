@@ -22,12 +22,14 @@ type MetricsPanel struct {
 
 	width, height int
 
+	service string // empty = show all services
+
 	allKeys  []metricRef // all known (service, key) — full set, used to filter
 	visKeys  []metricRef // currently visible after filter
 	selected int
 
-	mlist   list.Model
-	filter  textinput.Model
+	mlist     list.Model
+	filter    textinput.Model
 	filtering bool
 }
 
@@ -93,6 +95,10 @@ func (p *MetricsPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RefreshMsg:
 		p.refresh()
 		return p, nil
+	case ServiceChangedMsg:
+		p.service = m.Service
+		p.refresh()
+		return p, nil
 	case tea.KeyMsg:
 		if p.filtering {
 			switch m.String() {
@@ -132,8 +138,12 @@ func (p *MetricsPanel) refresh() {
 		prevKey = p.visKeys[p.selected].service + "::" + p.visKeys[p.selected].key
 	}
 
+	services := p.store.Services()
+	if p.service != "" {
+		services = []string{p.service}
+	}
 	var refs []metricRef
-	for _, svc := range p.store.Services() {
+	for _, svc := range services {
 		ms := p.store.MetricsFor(svc)
 		for k, s := range ms {
 			refs = append(refs, metricRef{service: svc, key: k, series: s})

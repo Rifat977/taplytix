@@ -3,12 +3,26 @@ package store
 import (
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/rifat977/taplytix/internal/model"
 )
 
 // DefaultLogCapacity is the per-service log ring buffer size.
 const DefaultLogCapacity = 1000
+
+// DefaultEventTrackerCapacity is the size of the per-service activity ring
+// used to compute events/s and error rate.
+const DefaultEventTrackerCapacity = 4096
+
+// ServiceStatus is a snapshot of a service's recent activity, used by the
+// Services panel and status bar.
+type ServiceStatus struct {
+	LastSeen        time.Time
+	EventsPerSecond float64
+	ErrorRate       float64
+	Connected       bool
+}
 
 // Store is the unified read/write entry point used by the TUI. It is keyed
 // by service name; each service has its own metric series, trace map, and
@@ -22,10 +36,13 @@ type Store struct {
 }
 
 type serviceState struct {
-	mu      sync.RWMutex
-	metrics map[string]*Series // key: metric name (with labels folded in)
-	traces  *TraceMap
-	logs    *Ring[model.LogEvent]
+	mu       sync.RWMutex
+	metrics  map[string]*Series // key: metric name (with labels folded in)
+	traces   *TraceMap
+	logs     *Ring[model.LogEvent]
+	events   *Ring[time.Time]
+	errors   *Ring[time.Time]
+	lastSeen time.Time
 }
 
 func New() *Store {
@@ -47,16 +64,38 @@ func (s *Store) PushMetric(e model.MetricEvent) {
 	}
 	st.mu.Unlock()
 	series.Push(e)
+	st.recordEvent(timeOrNow(e.Timestamp), false)
 }
 
 func (s *Store) PushSpan(e model.SpanEvent) {
 	st := s.serviceFor(e.Service)
 	st.traces.Add(e)
+	st.recordEvent(timeOrNow(e.StartTime.Add(e.Duration)), e.Status == model.StatusError)
 }
 
 func (s *Store) PushLog(e model.LogEvent) {
 	st := s.serviceFor(e.Service)
 	st.logs.Push(e)
+	st.recordEvent(timeOrNow(e.Timestamp), e.Level == model.LevelError)
+}
+
+func (st *serviceState) recordEvent(ts time.Time, isErr bool) {
+	st.mu.Lock()
+	if ts.After(st.lastSeen) {
+		st.lastSeen = ts
+	}
+	st.mu.Unlock()
+	st.events.Push(ts)
+	if isErr {
+		st.errors.Push(ts)
+	}
+}
+
+func timeOrNow(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now()
+	}
+	return t
 }
 
 func (s *Store) MetricsFor(service string) map[string]*Series {
@@ -119,9 +158,47 @@ func (s *Store) serviceFor(name string) *serviceState {
 		metrics: make(map[string]*Series),
 		traces:  NewTraceMap(),
 		logs:    NewRing[model.LogEvent](s.logCap),
+		events:  NewRing[time.Time](DefaultEventTrackerCapacity),
+		errors:  NewRing[time.Time](DefaultEventTrackerCapacity),
 	}
 	s.services[name] = st
 	return st
+}
+
+// ServiceStatus returns a snapshot of the service's activity. Connected is
+// true when the most recent event arrived within 10 seconds. Counts are
+// computed over the last 5 seconds.
+func (s *Store) ServiceStatus(name string) ServiceStatus {
+	st, ok := s.lookup(name)
+	if !ok {
+		return ServiceStatus{}
+	}
+	now := time.Now()
+	cutoff := now.Add(-5 * time.Second)
+	var ev, er int
+	for _, t := range st.events.Slice() {
+		if t.After(cutoff) {
+			ev++
+		}
+	}
+	for _, t := range st.errors.Slice() {
+		if t.After(cutoff) {
+			er++
+		}
+	}
+	st.mu.RLock()
+	last := st.lastSeen
+	st.mu.RUnlock()
+	rate := 0.0
+	if ev > 0 {
+		rate = float64(er) / float64(ev)
+	}
+	return ServiceStatus{
+		LastSeen:        last,
+		EventsPerSecond: float64(ev) / 5.0,
+		ErrorRate:       rate,
+		Connected:       !last.IsZero() && now.Sub(last) <= 10*time.Second,
+	}
 }
 
 func (s *Store) lookup(name string) (*serviceState, bool) {

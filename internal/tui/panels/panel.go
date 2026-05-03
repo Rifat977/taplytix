@@ -1,6 +1,12 @@
 package panels
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// ServiceChangedMsg is broadcast by the AppModel to every panel when the
+// active service changes. Panels filter their store reads to this name.
+type ServiceChangedMsg struct{ Service string }
 
 // Panel is the contract every TUI tab implements.
 type Panel interface {

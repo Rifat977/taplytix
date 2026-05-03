@@ -26,6 +26,8 @@ type TracesPanel struct {
 
 	width, height int
 
+	service string // empty = show all services
+
 	traces   []traceRef
 	selected int
 	expanded bool
@@ -122,6 +124,10 @@ func (p *TracesPanel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RefreshMsg:
 		p.refresh()
 		return p, nil
+	case ServiceChangedMsg:
+		p.service = m.Service
+		p.refresh()
+		return p, nil
 	case tea.KeyMsg:
 		switch m.String() {
 		case "enter":
@@ -161,8 +167,12 @@ func (p *TracesPanel) refresh() {
 		prevID = p.traces[p.selected].trace.TraceID
 	}
 
+	services := p.store.Services()
+	if p.service != "" {
+		services = []string{p.service}
+	}
 	var refs []traceRef
-	for _, svc := range p.store.Services() {
+	for _, svc := range services {
 		tm := p.store.TracesFor(svc)
 		if tm == nil {
 			continue
